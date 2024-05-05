@@ -71,7 +71,7 @@ set_all_seeds(0)
 
 epochs_gibbs=10000
 epochs_flows=4000
-epochs_vi =10000
+epochs_vi =4000
 if args.n_data>=2000:
     epochs_vi=20000
 thin = 1
