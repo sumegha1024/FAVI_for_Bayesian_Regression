@@ -1,9 +1,10 @@
 '''Linear Regression with NUTS, Gibbs, MF-VI and FAVI''' 
 import torch
+import numpy as np
 import torch.optim as optim
 import sys
 import os
-sys.path.append(os.path.join('/mnt/ufs18/home-104/premchan/Extensions_Normalizing_Flows_Review/','Flows_scripts'))
+sys.path.append(os.path.join('/mnt/ufs18/home-104/premchan/FAVI_for_Bayesian_Regression/','Flows_scripts'))
 import nn as nn_
 import torch.nn as nn
 from tqdm import tqdm
@@ -17,37 +18,37 @@ import flows
 from utils import set_all_seeds 
 import dill
 import pymc as pm
+import output
+import matplotlib.pyplot as plt
 #import arviz as az
-import torch.optim.lr_scheduler as lr_scheduler
-from output import *
 
 parser = argparse.ArgumentParser(description='inputs_regression')
 parser.add_argument('--mcmc_diag', nargs='+',default=None,help='list of strings. use NUTS if you want MCMC diagnostics for NUTS and MCMC for any other mcmc method')
 parser.add_argument('--vi', default=True, action='store_false', help='Whether we want results for MF-VI')
-parser.add_argument('--nuts', default=True, action='store_false', help='Whether we want results for NUTS')
-parser.add_argument('--rho',default =0.0, type=float, help='Correlation coefficient for design matrix')
+parser.add_argument('--nuts', default=False, action='store_false', help='Whether we want results for NUTS')
+parser.add_argument('--rho',default =0.6, type=float, help='Correlation coefficient for design matrix')
 parser.add_argument('--sigma',default =1.0, type=float, help='Standard dev for simulated data')
 parser.add_argument('--tau',default =1.0, type=float, help='Standard dev for beta prior')
 parser.add_argument('--sigma_prior', default=False, action='store_true', help='Whether we want sigma to be treated as constant or use a prior')
 parser.add_argument('--pr_roc', default=False, action='store_true', help='Whether we want pr and roc plots to be generated')
 parser.add_argument('--lr', default = 5e-3, type=float, help='learning rate for FAVI')
-parser.add_argument('--seed',default =3, type=int, help='seed for simulation')
+parser.add_argument('--seed',default =5, type=int, help='seed for simulation')
 parser.add_argument('--flow_samps',default =64, type=int, help='number of flow samples while training')
-parser.add_argument('--flow_type',default = 'DSF', type=str, help='type of flow transform to be used. DSF, DDSF or IAF')
+parser.add_argument('--flow_type',default = 'IAF', type=str, help='type of flow transform to be used. DSF, DDSF or IAF')
 parser.add_argument('--bsize_tr',default =0, type=int, help='default 0: sets it to training data size. i.e only one batch')
-parser.add_argument('--out',default = '/mnt/home/premchan/Extensions_Normalizing_Flows_Review/Comparisons_FAVI_vs_MFVI/Out/', type=str, help='path to results')
+parser.add_argument('--out',default = '/mnt/home/premchan/FAVI_for_Bayesian_Regression/Out/', type=str, help='path to results')
 parser.add_argument('--pretrain',default = 0, type=int, help='epoch corresponding to pre-trained model')
-parser.add_argument('--data_dim',default =50, type=int, help='dimension of beta vector')
+parser.add_argument('--data_dim',default =2, type=int, help='dimension of beta vector')
 parser.add_argument('--n_data',default =200, type=int, help='number of samples for y')
 parser.add_argument('--dsf_dim',default =4, type=int, help='hidden dim for dsf/ddsf flow')
 parser.add_argument('--dsf_l',default =1, type=int, help='num of layers for dsf/ddsf flow')
-parser.add_argument('--cmade_dim',default =4, type=int, help='hidden dim for cmade network')
-parser.add_argument('--cmade_l',default =2, type=int, help='num of layers for cmade network')
+parser.add_argument('--cmade_dim',default =1, type=int, help='hidden dim for cmade network')
+parser.add_argument('--cmade_l',default =2, type=int, help='num of layers for cmade network plus 1')
 parser.add_argument('--sparse',default =0.2, type=float, help='sparsity level for true beta0 in %')
-parser.add_argument('--writecsv', default=False, action='store_true', help='Whether we want to write metrics to csv file')
+parser.add_argument('--writecsv', default=False, action='store_true', help='Whether we want to write performance metrics to csv file')
 args = parser.parse_args()
 
-args.out=args.out+'Out_flowtype_'+args.flow_type+'_fsamps'+str(args.flow_samps)+'_lr_'+str(args.lr)+'_rho'+str(args.rho)+'_dsdim'+str(args.dsf_dim)+'/'
+args.out=args.out+'Out_flowtype_'+args.flow_type+'_fsamps'+str(args.flow_samps)+'_lr_'+str(args.lr)+'_rho'+str(args.rho)+'_cdim'+str(args.cmade_dim)+'/'
 isExist = os.path.exists(args.out)
 if not isExist:
     os.makedirs(args.out+'MH_Diagnostics/')
@@ -86,8 +87,6 @@ idx0=set([item for item in range(p)])
 S0=random.sample(idx0,int(p*(1-args.sparse)))
 if p > 10:
     beta0[S0]=0.0
-beta0[0]=np.log(0.8*nw)
-beta0[1]=np.log(0.8*nw)
 print("beta0",beta0)
 mean=np.zeros((p,))
 rho=args.rho
@@ -114,7 +113,9 @@ X_X=torch.mm(X.T,X)
 X_diag=torch.diag(X_X)
 beta_ols = np.array(torch.matmul(torch.inverse(X_X),X_y))
 
+#######################################################################################################################
 
+#function to calculate model predictive rmse
 def mod_rmse(y,x,beta):
     ypred = np.dot(x,beta.mean(0))
     return np.sqrt(np.mean((y - ypred)**2))
@@ -126,7 +127,7 @@ Time = {"MCMC":None,"Flows":None,"NUTS":None}
 
 
 ##################################################################MCMC - Gibbs#############################################################################################
-'''Gibbs Sampling or True Posterior: Depending on whether sigma is unknown or known'''
+'''Gibbs Sampling or True Posterior: Depending on whether sigma is unknown or known respectively'''
 
 start = time.time()
 if args.sigma_prior == False:
@@ -196,7 +197,7 @@ if args.nuts==True:
 
 
 
-########################################################################################################################################################
+#############################################Auxillary functions for FAVI###########################################################################################################
 '''Some useful functions'''
 X_y_f = X_y.type(torch.FloatTensor)
 X_X_f = X_X.type(torch.FloatTensor)
@@ -277,7 +278,6 @@ class model(object):
         loss_store=[]
         num_batches = n / bsize_tr
         permutation = torch.randperm(n)
-        #lr_sched = lr_scheduler.StepLR(self.optim, step_size=epochs, gamma=0.1)
         for it in range(total):
 
             for bh in range(0,n,bsize_tr):
@@ -295,9 +295,6 @@ class model(object):
             
                 loss.backward()
                 self.optim.step()
-                #if ii+1 > 100:
-                #    lr_sched.step()
-                #    print(lr_sched.get_last_lr())
 
                 loss_store.append(loss.detach().numpy())
 
@@ -422,14 +419,14 @@ if args.nuts==True:
     mu_post_smps['NUTS']=beta_samples_NUTS_store
 
 if args.sigma_prior==False:
-    generate_plots(mu_post_smps, color_dict, hyper_params, args.out, beta0, mcmc_diag=args.mcmc_diag)
+    output.generate_plots(mu_post_smps, color_dict, hyper_params, args.out, beta0, mcmc_diag=args.mcmc_diag)
 else:
     sigma_post_smps={'MCMC':sigma_samples_MCMC_store,'Flows':(np.log(1+np.exp(data[:,-1])))**2}
     if args.vi==True:
         sigma_post_smps['MF-VI']=sigma_samples_VI
     if args.nuts==True:
         sigma_post_smps['NUTS']=beta_samples_NUTS_store
-    generate_plots(mu_post_smps, color_dict, hyper_params, args.out, beta0, sigma_post_smps,mcmc_diag=args.mcmc_diag) 
+    output.generate_plots(mu_post_smps, color_dict, hyper_params, args.out, beta0, sigma_post_smps,mcmc_diag=args.mcmc_diag) 
 
 
 #Flows Loss
@@ -441,9 +438,11 @@ plt.clf()
 
 
 #####################################################INFERENCE##########################################################################
-#CHANGE Batch size
+
 #Calculating sample KL div when \sigma_2 is known using elbo obtained after training
-if args.sigma_prior==False:
+#Note the same function to calculate sample kl will not apply when number of batches>1.
+
+if args.sigma_prior==False and args.bsize_tr==n:
     kl={}
     H=np.linalg.inv(X_X.numpy()+np.identity(p)/(tau**2))
     X_y_n=X_y.numpy()
@@ -455,6 +454,6 @@ if args.sigma_prior==False:
     kl["MCMC"] = None
     kl["NUTS"] = None
 
-generate_metrics(mu_post_smps, color_dict, hyper_params, rmse, Time, args.out, mu0=beta0, pr_roc=args.pr_roc, writecsv=args.writecsv,kl=kl)
+output.generate_metrics(mu_post_smps, color_dict, hyper_params, rmse, Time, args.out, mu0=beta0, pr_roc=args.pr_roc, writecsv=args.writecsv,kl=kl)
 
 
