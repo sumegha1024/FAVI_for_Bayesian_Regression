@@ -10,4 +10,7 @@ More specifically, this code can be used to reproduce the results in the paper "
 The scripts in the folder "Flows_scripts" have been re-purposed from the repository <https://github.com/CW-Huang/NAF>.
 
 
-# 
+# Requirements
+
+Python 3.0+ PyTorch 1.13.0+cpu + numpy 1.22.1      
+For more details on package versions see Conda_env_info1.png, Conda_env_info2.png. 
